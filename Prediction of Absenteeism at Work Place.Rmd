@@ -1,0 +1,567 @@
+---
+title: "Prediction of Absenteeism at Workplace"
+author: "Team7-Himangshu, Junaid, Sankshiptha"
+date: "February 6, 2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+## Clear the environment
+rm(list = ls())
+
+## Set your working directory path here
+workingdirectory = "C:/Users/MANISHA/Desktop/ANLY530-ML1-Project/ANLY530-Final/Final_Dliverables"
+setwd(workingdirectory)
+
+## Libraries required for this project
+library(ggplot2)
+
+library(corrplot)
+
+library(factoextra)
+
+library(NbClust)
+
+library(cluster)
+
+library(purrr)
+
+library(MASS)
+
+library(gridExtra)
+
+library(tree)
+
+library(Metrics)
+
+library(randomForest)
+
+library(C50) 
+
+library(kernlab)
+
+library(caret)
+
+library(rpart)
+
+library(rpart.plot)
+
+```
+
+```{r}
+
+## Read input Absenteeism_at_work.csv from working directory.
+absentdata = read.csv('Absenteeism_at_work.csv', header = T, sep = ";")
+
+```
+
+
+### Data Exploration and Preprocessing
+
+```{r}
+## Structure of the data
+str(absentdata)
+
+## Summary statistics
+summary(absentdata)
+
+```
+
+```{r}
+## Zero in Reason.for.absence for absence is not a valid reason code. ICD and non-ICD codes do not support it. 
+## Removed observations zero in Reason code. 
+range(absentdata$Reason.for.absence)
+absentdata <- absentdata[!(absentdata$Reason.for.absence == 0),]
+
+```
+
+```{r}
+
+## Observations in which reason code is greater than zero but absenteeism time in hours is > 0 + 
+## Observations in which reason code is zero and absenteism time is zero.
+a <- subset(absentdata, Absenteeism.time.in.hours <= 0 & Reason.for.absence > 0, c(ID, Reason.for.absence, Absenteeism.time.in.hours))
+b <- subset(absentdata, Absenteeism.time.in.hours <= 0 & Reason.for.absence == 0, c(ID, Reason.for.absence, Absenteeism.time.in.hours))
+as.matrix(rbind(a,b))
+
+## REason code 27 is the only one wherer Absenteeism time is zero. Removed that observation. 
+absentdata = absentdata[!(absentdata$Absenteeism.time.in.hours==0 & absentdata$Reason.for.absence > 0) ,]
+
+```
+
+```{r}
+## At this point we have 696 observations and 21 attributes. 
+#dim(absentdata)
+#summary(absentdata)
+
+## Disciplinary failure is a noise. ONlu zeros in Disciplinary Failure. 
+range(absentdata$Disciplinary.failure)
+
+## Removied Disciplinary failure attribute. 
+absentdata <- absentdata[,-12]
+
+#str(absentdata)
+## Now we have 696 observations and 20 attributes. 
+
+```
+
+
+```{r}
+## Missing value analysis
+as.matrix(colSums(is.na(absentdata)))
+
+# There is no missing value in any any attributes. 
+
+```
+
+```{r}
+## Box plot of Absenteeism time in hours with Reason for absence. To verify the outliers in each reason codes. 
+ggplot(absentdata,
+    aes_string(y=absentdata$Absenteeism.time.in.hours,x=as.factor(absentdata$Reason.for.absence))) +
+    geom_boxplot() + 
+    xlab('Reason.for.absence') +
+    ylab('Absenteeism.time.in.hours')
+
+```
+
+```{r}
+## Let's see the Distribution for continuous variables. 
+
+## Absenteeism time. Highly right skewed due to presence of outliers. 
+hist(absentdata$Absenteeism.time.in.hours, breaks = 40, #prob = TRUE,
+     xlab = 'Absenteeism time in hours', main = " Absenteeism time Distribution", col = "grey")
+boxplot(absentdata$Absenteeism.time.in.hours, main = "Box plot of Absenteeism time in hours")
+
+
+```
+
+```{r}
+#Outlier Analysis
+
+
+#boxplot for Transportation.expense, Distance.from.Residence.to.Work, Service.time, Age, Hit.target
+boxplot(absentdata[,c('Transportation.expense','Distance.from.Residence.to.Work', 'Service.time', 'Age','Hit.target')], varwidth = T, 
+        col = "dark grey")
+
+#boxplot for Weight,Height,Body.mass.index,Absenteeism.time.in.hours
+boxplot(absentdata[,c('Weight', 'Height', 'Body.mass.index','Absenteeism.time.in.hours')], col = "grey", varwidth = T)
+
+#boxplot for Work.load.Average.day 
+boxplot(absentdata[,c('Work.load.Average.day')], col = "grey")
+```
+
+```{r}
+## We do not delete the outliers instead we will cap the outliers with 25 and 75 percentiles. 
+## Capping outliers - replacing outliers with 25percentile and 75percentile values. 
+
+for (i in c('Transportation.expense','Service.time','Age','Work.load.Average.day','Hit.target','Height','Absenteeism.time.in.hours')){
+  q = quantile(absentdata[,i],c(0.25,0.75))
+  iqr1 = q[2]-q[1]
+  min1 = q[1]-1.5*iqr1
+  max1 = q[2]+1.5*iqr1
+  absentdata[,i][absentdata[,i]<min1] = min1
+  absentdata[,i][absentdata[,i]>max1] = max1
+}
+
+## Reason for absence vs absenteeism in time after outlier capping
+ggplot(absentdata,
+    aes_string(y=absentdata$Absenteeism.time.in.hours,x=as.factor(absentdata$Reason.for.absence))) +
+    geom_boxplot() + 
+    xlab('Reason.for.absence') +
+    ylab('Absenteeism.time.in.hours')
+
+#boxplot for Transportation.expense, Distance.from.Residence.to.Work, Service.time, Age, Hit.target
+boxplot(absentdata[,c('Transportation.expense','Distance.from.Residence.to.Work', 'Service.time', 'Age','Hit.target')], varwidth = T, 
+        col = "dark grey")
+
+#boxplot for Weight,Height,Body.mass.index,Absenteeism.time.in.hours
+boxplot(absentdata[,c('Weight', 'Height', 'Body.mass.index','Absenteeism.time.in.hours')], col = "grey", varwidth = T)
+
+#boxplot for Work.load.Average.day 
+boxplot(absentdata[,c('Work.load.Average.day')], col = "grey")
+
+
+```
+
+```{r}
+## Data independence, Multicollinearity test. 
+## First categorical variables. 
+categorical_var = c("Reason.for.absence","Month.of.absence","Day.of.the.week",
+                     "Seasons", "Education", "Social.drinker",
+                     "Social.smoker", "Son", "Pet")
+
+## Transform categorical variables into factors. 
+absentdata[,categorical_var ] <- lapply(absentdata[,categorical_var], factor)
+#str(absentdata)
+
+# Chi-square test for relationship between attributes. 
+pvalue = c()
+
+#Calculating & storing p-values in vector pval from chisquare test
+for(i in categorical_var){ 
+  for(j in categorical_var){
+    chi2 = chisq.test(absentdata[,i],absentdata[,j]) #, simulate.p.value = T)
+    pvalue = c(pvalue,chi2$p.value)
+  }
+}
+
+
+length(pvalue)
+m1 <- matrix(pvalue, ncol = 9)
+df <- data.frame(m1)
+row.names(df) <- categorical_var
+colnames(df) <- categorical_var
+print(df)
+## As per the chisquare test, except Reason.for.absence and Day.of.the.week, all categorical variables are related to Reason.for.absence, as the p-values are less than 0.005. So, we removed all categorical variables correlated to Reason.for.absence but Day.of.the.week.
+absentdata <- absentdata[, -c(3, 5, 12,13,14, 15, 16)]
+
+
+## Correltaion matrix for continuous attribute
+m <- cor(absentdata[,4:13])
+corrplot(m, order = "hclust", tl.srt = 30, tl.col = "black", addrect = 3, method = "number" )
+## Correlation between Absenteeism.time.in.hours and predictor are below 0.1. But high collinearity found between Weight and Body.mass.index. So, I removed Weight from the dataframe. 
+absentdata = absentdata[,-10]
+
+## After data pre-processiin we are left with 696 observstions and 12 variables including target variable. . 
+```
+
+
+
+```{r}
+## Test for linearity in the data
+pairs(absentdata[, -c(1:3)])
+
+## Data is not linear. So, linear models will not be a good choice for this data. 
+
+
+######################## End of Data Preprocessing ############################
+```
+
+
+```{r}
+# Aggregating Absenteeism.time.in.hours by Reason.for.absence
+Reasons = aggregate(absentdata$Absenteeism.time.in.hours, by=list(Category=absentdata$Reason.for.absence), FUN=sum)
+#print(as.data.frame(Reasons))
+Reasons$Absence = (Reasons$x/sum(absentdata$Absenteeism.time.in.hours))*100
+Reasons = Reasons[order(Reasons$Absence, decreasing = T),]
+#print(Reasons)
+barplot(Reasons$Absence, names.arg = Reasons$Category, xlab = "Reason for absence", ylab = "Absence", col = "dark grey", 
+        main = "How much proportion each reason code plays in absenteeism")
+```
+
+
+
+```{r}
+## Taking backup of preprocessed data
+
+#write.csv(modeldata, "modeldata.csv", row.names = F)
+
+
+
+```
+
+
+
+
+### Model building using Machine Learning Algorithms.
+
+```{r}
+
+### We will see how many grous are there in the data set by means of K-means clustering.
+modeldata = absentdata[,-c(1,2,3)]
+
+df = scale(modeldata)
+## NbClust method
+## wssplot function to give value of K based on elbow method using within cluster sum of squeares.
+wssplot <- function(data, nc = 20, seed = 1234) {
+    wss <- (nrow(data) - 1) * sum(apply(data, 2, var))
+    for (i in 2 : nc) {
+        set.seed(seed)
+        wss[i] <- sum(kmeans(data, centers = i)$withins)}
+    plot(1:nc, wss, type = "b", xlab = "Number of Clusters",
+         ylab = "Within groups sum of squares")
+}
+
+wssplot(df)
+set.seed(1234)
+nc <- NbClust(df, min.nc = 3, max.nc = 20, method = "kmeans" )
+barplot(table(nc$Best.nc[1,]))
+## According to NbCluster method, 3 would be optimal value of K.  
+```
+```{r}
+set.seed(1234)
+### Elbow method - K = 3 optimal value
+fviz_nbclust(df, kmeans, method = "wss")
+```
+
+```{r}
+## Average Silhoutte Method = k = 9, optimal value
+set.seed(1234)
+fviz_nbclust(df, kmeans, method = "silhouette")
+
+```
+
+```{r}
+
+## Comparison of k-values
+
+set.seed(1234)
+k3 <- kmeans(df, centers = 3, nstart = 25)
+k4 <- kmeans(df, centers = 4, nstart = 25)
+k7 <- kmeans(df, centers = 7, nstart = 25)
+k9 <- kmeans(df, centers = 9, nstart = 25)
+
+# plots to compare
+p1 = fviz_cluster(k3, geom = "point", data = df) + ggtitle("k = 3")
+p2 = fviz_cluster(k4, geom = "point", data = df) + ggtitle("k = 4")
+p3 = fviz_cluster(k7, geom = "point",  data = df) + ggtitle("k = 7")
+p4 = fviz_cluster(k9, geom = "point",  data = df) + ggtitle("k = 9")
+
+grid.arrange(p1, p2, p3, p4, nrow = 2)
+```
+
+```{r}
+# Compute k-means clustering with k = 3
+set.seed(1234)
+final <- kmeans(df, 3, nstart = 25)
+final$center
+fviz_cluster(final, data = df)
+#print(final)
+
+
+```
+
+
+
+
+```{r}
+
+## Build models supervesed learning way. 
+## Response variable is Absenteeism.time.in.hours. We will create 6 categoris and build models to predict the class. 
+modeldata <- absentdata
+
+
+temp_table = table(as.factor(modeldata$Absenteeism.time.in.hours))
+barplot(temp_table, xlab = "Absenteeism in Hours", ylab = "Frequency", main = "Absenteeism frequency")
+## Most of the time it is 8 hours people go abesent from work. That means full day absenteeism is common trend. 
+
+## According to K-means cluster, this data comprises of 3 partition or 3 groups. So, creating three class lebels for absenteeism.in.time.hours, low - absenteeism hours is within 1 to 4 hours, moderate when 5 to 8 hours, high when greater than 8 hours. 
+absentgroup <- ifelse((modeldata$Absenteeism.time.in.hours >= 1 & modeldata$Absenteeism.time.in.hours <=4), "low", "high")              
+tempdata <- as.integer(as.character(modeldata$Absenteeism.time.in.hours))
+for (i in 1:length(tempdata)) {
+    
+    if(tempdata[i] >= 1 & tempdata[i] <=4){
+        
+        modeldata$absentgroup[i] = "low"
+    
+    } else if(tempdata[i] > 4 & tempdata[i] <= 8){
+    
+        modeldata$absentgroup[i] = "moderate"
+    
+    } else { modeldata$absentgroup[i] = "high"}
+    
+}
+
+table(modeldata$absentgroup)
+modeldata$absentgroup = factor(modeldata$absentgroup)
+
+```
+
+
+
+```{r}
+## We are using validatioin set approach for resampling. Select 80% observation for training and 20% for testing.
+## Removing ansenteeism.in.time.hours and ID attributes. 
+modeldata = modeldata[, -12]
+modeldata = modeldata[,-1]
+
+#smp_size <- floor(0.75 * nrow(modeldata))
+
+## set the seed to make partition reproducible
+set.seed(1234)
+train_index = sample(1:nrow(modeldata), 0.8*nrow(modeldata))        
+train = modeldata[train_index,]
+test = modeldata[-train_index,]
+test.group <- test$absentgroup
+
+```
+
+
+```{r}
+## first model - Simple Classification Tree with "tree" function of "tree" package. 
+
+model_tree <- tree(absentgroup ~ . , data = train)
+summary(model_tree)
+
+plot(model_tree)
+text(model_tree, pretty = 0, cex = 0.8)
+
+model_tree_pred = predict(model_tree, test, type = "class")
+
+#conf_matrix = table(model_tree_pred, test.group)
+#model_tree_acu = sum(diag(conf_matrix))/sum(conf_matrix)
+
+
+print(postResample(pred = model_tree_pred, obs = test.group))
+confusionMatrix(model_tree_pred, test.group)
+
+```
+
+
+
+```{r}
+
+## Linear Discriminant Analysis
+
+lda.fit = lda(absentgroup ~ ., data = train)
+lda.fit
+
+#summary(lda.fit)
+plot(lda.fit, col = as.integer(train$absentgroup))
+plot(lda.fit, dimen = 1, type = 'b') 
+
+
+lda.test <- predict(lda.fit,test)
+test$lda <- lda.test$class
+table(test$lda,test$absentgroup)
+
+print(postResample(pred = test$lda, obs = test.group))
+confusionMatrix(test$lda, test.group)
+
+
+ldahist(data = lda.test$x[,1],g = test.group)
+plot(lda.test$x[,1], lda.test$x[,2])
+text(lda.test$x[,1], lda.test$x[,2], test$absentgroup, cex = 0.7, pos = 4, col = c("red","green","blue"))
+
+test = test[,-12]
+```
+
+
+
+
+
+
+```{r}
+## Random forest 
+set.seed(1234)
+#split 3, error rate 27.32%
+rf.fit = randomForest(absentgroup~., data = train, importance = TRUE)
+rf.fit
+#rf.fit.pred <- predict(rf.fit, test, type = "class")
+
+# Fine tuning parameters of Random Forest model, split 6. Error rate 26.62%
+rf.fit1 <- randomForest(absentgroup ~ ., data = train, ntree = 500, mtry = 6, importance = TRUE)
+rf.fit1
+rf.fit1.pred <- predict(rf.fit1, test, type = "class")
+
+# Checking classification accuracy
+
+print(postResample(pred = rf.fit1.pred, obs = test.group))
+confusionMatrix(rf.fit1.pred, test.group)
+importance(rf.fit1)
+varImpPlot(rf.fit1)
+
+# Using For loop to identify the right mtry for model
+a=c()
+#i=5
+
+for (i in 1:8) {
+  rf.fit2 <- randomForest(absentgroup ~ ., data = train, ntree = 500, mtry = i, importance = TRUE)
+  rf.fit2.pred <- predict(rf.fit2, test, type = "class")
+  a[i-2] = mean(rf.fit2.pred == test.group)
+}
+a
+plot(3:8,a, type = "b")
+
+rf.fit5 <- randomForest(absentgroup ~ ., data = train, ntree = 500, mtry = 5, importance = TRUE)
+rf.fit5.pred <- predict(rf.fit5, test, type = "class")
+print(postResample(pred = rf.fit5.pred, obs = test.group))
+confusionMatrix(rf.fit5.pred, test.group)
+```
+
+```{r}
+
+## Building the Classification Tree Models using the Quinlan's C5.0 algorithm
+c50.fit  <- C5.0(train[-11], train$absentgroup, trials = 10)
+summary(c50.fit)
+
+plot(c50.fit)
+
+c50.fit.pred <- predict(c50.fit, test)
+
+print(postResample(pred = c50.fit.pred, obs = test.group))
+confusionMatrix(c50.fit.pred, test.group)
+
+```
+
+```{r}
+## Recursive PArtition Regression Tree - RPART
+
+m2 = rpart(absentgroup ~ .,train, method = "class")
+m2.pred = predict(m2, test, type = "class")
+print(postResample(pred = m2.pred, obs = test.group))
+confusionMatrix(m2.pred, test.group)
+
+plot(m2)
+text(m2, pretty = 0, cex = 0.8)
+
+prp(m2, varlen = 4, extra = 2)
+
+```
+
+```{r}
+
+## Support Vector machine 
+
+absent_classifier <- ksvm(absentgroup ~ ., data = train, kernel = "vanilladot")
+
+absent_classifier
+
+#Evaluating the SVM Model Performance
+
+absent_predictions <- predict(absent_classifier, test) 
+table(absent_predictions, test.group )
+
+
+#Confusion Matrix for SVM Model
+
+agreement <- absent_predictions == test.group 
+table(agreement)
+
+print(postResample(pred = absent_predictions, obs = test.group))
+
+
+```
+
+
+
+```{r}
+############## Random Forest is our Best PErformaer ##################
+
+############### Final Prediction on entire data set ##################
+
+finalData = rbind(train, test)
+
+final_fit <- predict(rf.fit5, finalData, type = "class")
+
+summary(final_fit)
+
+
+#table(final_fit, modeldata$absentgroup)
+
+print(postResample(pred = final_fit, obs = finalData$absentgroup))
+
+confusionMatrix(final_fit, finalData$absentgroup)
+
+
+### Best perfomer is Random Forest with 5 splits. ON entire data, random forest's prediction accuracy 93%. Kappa 87% tells the model is almost perfect to predict the absenteeism group. 
+
+
+################################## End of Projct Absenteeism at Wrok #####################################
+```
+
